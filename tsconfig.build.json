@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		"noEmit": false,
+		"target": "ES2022",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"outDir": "dist",
+		"baseUrl": ".",
+		"noEmitOnError": false,
+		"declaration": true,
+		"declarationMap": true,
+		"paths": {
+			"@types": ["types/index.d.ts"],
+		}
+	},
+	"include": ["./src/**/*.ts", "./index.ts", "./types/**/*.d.ts"],
+	"exclude": ["./src/tests/**/*", "./node_modules", "./dist", "scripts/*"]
+}

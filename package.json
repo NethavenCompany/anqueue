@@ -1,0 +1,43 @@
+{
+  "name": "anqueue",
+  "version": "1.0.0",
+  "description": "An asynchronous node task queue",
+  "keywords": [
+    "async",
+    "node",
+    "queue"
+  ],
+  "homepage": "https://github.com/NethavenCompany/anqueue#readme",
+  "bugs": {
+    "url": "https://github.com/NethavenCompany/anqueue/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/NethavenCompany/anqueue.git"
+  },
+  "license": "ISC",
+  "author": "Vincent P.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx index.ts",
+    "start": "tsx index.ts",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && npx tsc --project tsconfig.build.json && cp -r types dist/",
+    "build:watch": "npx tsc --project tsconfig.build.json --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "tsx": "^4.20.4"
+  }
+}
