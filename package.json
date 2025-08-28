@@ -5,7 +5,10 @@
   "keywords": [
     "async",
     "node",
-    "queue"
+    "queue",
+    "task-queue",
+    "worker",
+    "typescript"
   ],
   "homepage": "https://github.com/NethavenCompany/anqueue#readme",
   "bugs": {
@@ -15,7 +18,7 @@
     "type": "git",
     "url": "git+ssh://git@github.com/NethavenCompany/anqueue.git"
   },
-  "license": "ISC",
+  "license": "MIT",
   "author": "Vincent P.",
   "type": "module",
   "main": "dist/index.js",
@@ -27,17 +30,30 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist/**/*",
+    "types/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx index.ts",
     "start": "tsx index.ts",
     "clean": "rm -rf dist",
     "build": "npm run clean && npx tsc --project tsconfig.build.json && cp -r types dist/",
-    "build:watch": "npx tsc --project tsconfig.build.json --watch"
+    "build:watch": "npx tsc --project tsconfig.build.json --watch",
+    "prepublishOnly": "npm run build",
+    "prepack": "npm run build",
+    "version": "npm run build && git add -A dist",
+    "postversion": "git push && git push --tags"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "typescript": "^5.9.2",
     "tsx": "^4.20.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
