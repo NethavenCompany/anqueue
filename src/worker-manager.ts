@@ -59,21 +59,41 @@ export default class WorkerManager {
 	}
 
 	/**
-	 * Retrieves a specific worker process by ID.
+	 * Retrieves a specific Worker by ID.
 	 *
 	 * @param id - The unique identifier of the worker
-	 * @returns The child process if found, undefined otherwise
+	 * @returns The Worker if found, undefined otherwise
 	 */
 	public get(id: string) {
 		return this._workers.get(id);
 	}
 
-	public getQueue(): Queue {
-		return this._queue;
+	public set(id: string, worker: Worker) {
+		return this._workers.set(id, worker);
 	}
 
 	public remove(id: string) {
+		const worker = this._workers.get(id);
+		
+		if (worker) worker.close();
+
 		return this._workers.delete(id);
+	}
+
+	public map(f: (worker: Worker, workerId: string) => void) {
+		return Array.from(this._workers.values()).map((worker, key) => f(worker, key as unknown as string));
+	}
+
+	public forEach(f: (worker: Worker, workerId: string) => void) {
+		this._workers.forEach((worker, key) => f(worker, key));
+	}
+
+	public get size() {
+		return this._workers.size;
+	}
+
+	public getQueue(): Queue {
+		return this._queue;
 	}
 
 	/**
@@ -114,8 +134,7 @@ export default class WorkerManager {
 	 */
 	public close(workerId: string, force = false) {
 		const worker = this.get(workerId);
-		if (!worker) return;
-		worker.close(force);
+		if (worker) worker.close(force);
 	}
 
 	/**
@@ -161,10 +180,6 @@ export default class WorkerManager {
 		this._workers.set(workerId, worker);
 
 		return worker;
-	}
-
-	private forEach(f: (worker: Worker, workerId: string) => void) {
-		this._workers.forEach((worker, key) => f(worker, key));
 	}
 
 	private _generateId(): string {

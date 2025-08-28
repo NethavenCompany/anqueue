@@ -72,8 +72,6 @@ export default class Worker {
 		worker.disconnect();
 
 		if (force) worker.kill();
-
-		return this._manager.remove(this.id);
 	}
 
 	public setTaskLoad(load: number) {
@@ -117,6 +115,7 @@ export default class Worker {
 				}, delay);
 			} else {
 				this.close(true);
+				this._manager.remove(this.id);
 				console.error(`[Worker: ${this.id}] exceeded max restart attempts. Manual intervention required.`);
 			}
 		});

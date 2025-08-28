@@ -6,8 +6,6 @@ import TaskExecutor from "./task-executor.js";
 import { ensureDir, getFileParts } from "./lib/files.js";
 import { generateClassName } from "./lib/util.js";
 
-import type { TaskValidationRule } from "../types/index.d.ts";
-
 export default class TaskExecutorRegistry {
 	private _registry: Map<string, TaskExecutor> = new Map();
 	private _initialized: boolean = false;

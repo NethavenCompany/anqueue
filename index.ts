@@ -448,6 +448,6 @@ export default class Queue {
 	}
 }
 
-export { Task, TaskStore, TaskExecutor, getFileParts, safeUpsert, hasProperty };
+export { Task, TaskExecutor, getFileParts, safeUpsert, hasProperty, WorkerManager };
 
 export type { WorkerStatus, TaskResult, TaskStatus, TaskValidationRule };
