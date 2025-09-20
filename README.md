@@ -23,14 +23,14 @@ npm install anqueue
 ## Quick Start
 
 ```typescript
-import Queue, { Task } from "anqueue";
+import Queue, { Task, PrismaAdapter } from "anqueue";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 // Point the queue at your task executors directory
 const queue = new Queue("./tasks", { 
-  db: prisma,
+  db: new PrismaAdapter(prisma),
   workerPrefix: "MyAppWorker",
   maxWorkers: 2
 });
@@ -230,13 +230,7 @@ const queue = new Queue("./tasks", {
 
 ## Database Integration
 
-Pass a Prisma client to enable task persistence:
-
-```typescript
-const queue = new Queue("./tasks", { 
-  db: new PrismaClient() 
-});
-```
+AnQueue supports optional database integration for persistent task storage and tracking. By connecting a database adapter (such as the provided PrismaAdapter), tasks are automatically saved, updated, and synchronized between memory and your database. This enables reliable task recovery, auditing, and coordination across multiple processes or restarts.
 
 ### Expected Database Schema
 
@@ -244,37 +238,30 @@ const queue = new Queue("./tasks", {
 CREATE TABLE tasks (
   uid VARCHAR PRIMARY KEY,
   type VARCHAR NOT NULL,
+  name VARCHAR,
+  description VARCHAR,
+  data VARCHAR,
   status VARCHAR NOT NULL,
   data JSON,
   error TEXT,
-  usersId VARCHAR,
   started_at TIMESTAMP,
   finished_at TIMESTAMP
 );
 ```
 
-### Database Utilities
+### Database Adapters
 
-Use `safeUpsert` for reliable database operations:
+When using a database adapter, tasks are automatically persisted and updated.
+Pass your generated PrismaClient to the adapter to enable task persistence:
+
+> Note: Currently only an adapter for prisma is available, more are planned in the future.
 
 ```typescript
-import { safeUpsert } from "anqueue";
-
-await safeUpsert(db.tasks, { uid: task.uid }, {
-  uid: task.uid,
-  type: task.type,
-  status: task.status,
-  data: task.data ?? null,
-  error: task.error ? JSON.stringify(task.error) : null,
-  usersId: task.userId,
-  started_at: task.startedAt,
-  finished_at: task.completedAt,
-}, async (saved) => {
-  if (saved && task.status === "completed") {
-    queue.remove(task.uid);
-  }
+const queue = new Queue("./tasks", { 
+  db: new PrismaAdapter(new PrismaClient()) 
 });
 ```
+
 
 ## API Reference
 
@@ -282,9 +269,9 @@ await safeUpsert(db.tasks, { uid: task.uid }, {
 
 - `constructor(taskDirectory: string, options?: QueueOptions)`
 - `init(): Promise<Queue>` – spawns workers and registers executors
-- `setDatabase(db: PrismaClient): void` – set/replace database connection
+- `setDatabase(adaptor: AdapterImplementation): void` – set/replace database connection
 - `runAutomatically(timeoutSeconds: number): Promise<void>` – periodic processing loop
-- `runPendingTasks(): Promise<void>` – send ready tasks to workers immediately
+- `runTasks(tasks?: Task[]): Promise<void>` – send tasks to workers; defaults to all pending in-memory tasks if none specified.
 - `scheduleTasks(): Promise<void>` – sort in-memory tasks by priority
 - `add(task: Task): this` – add task to queue
 - `remove(taskId: string): boolean` – remove task by ID
@@ -345,6 +332,22 @@ AnQueue automatically generates TypeScript types for your task directory at star
 4. **Progress Updates**: Call `task.updateProgress()` for long-running tasks
 5. **Resource Management**: Implement proper cleanup sing the `onComplete` and `onFailure` hooks for complex tasks
 6. **Database Operations**: Use `safeUpsert` for more reliable persistence when using prisma
+
+## Core Architecture
+
+The `src` directory contains the core components that power AnQueue:
+
+- `database-adapter.ts`: Defines the interface for database interactions, allowing AnQueue to be decoupled from specific ORMs or database clients.
+- `task.ts`: Represents a single task in the queue, encapsulating its state, data, and lifecycle methods.
+- `task-executor.ts`: The base class for all task executors, defining the hooks and methods for task execution, validation, and retry logic.
+- `task-registry.ts`: Manages the discovery and registration of `TaskExecutor` classes from the specified task directory.
+- `task-store.ts`: Handles in-memory storage and retrieval of tasks, acting as the central source of truth for pending and active tasks.
+- `task-strategies.ts`: Contains various strategies for task management, such as scheduling, retry policies, and worker assignment.
+- `worker.ts`: Defines the individual worker process responsible for executing tasks in isolation.
+- `worker-manager.ts`: Manages the lifecycle of worker processes, including spawning, monitoring, and restarting them as needed.
+- `worker-script.ts`: The entry point script executed within each isolated worker process to set up the task execution environment.
+- `lib/files.ts`: Utility functions for file system operations, primarily used for task executor discovery.
+- `lib/util.ts`: General utility functions used throughout the AnQueue codebase.
 
 ## License
 

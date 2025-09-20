@@ -9,16 +9,16 @@ import { generateQueueTypes } from "../../scripts/generate-types.js";
 export { generateClassName } from "../../scripts/generate-types.js";
 
 /**
- * Utility function to validate the contents of any objects.
- * 
- * @param object 
+ * Utility function to validate the direct contents of any object.
+ *
+ * @param object
  * @param property The key of the property you want to validate
  * @param expect The value and/or type you expect it to be.
  * @returns
  */
-export function hasProperty<T extends object>(
+export function hasProperty<T extends object | unknown>(
 	object: T,
-	property: keyof T,
+	property: keyof T | string,
 	expect?: {
 		type?: TypeString;
 		value?: unknown;
@@ -32,7 +32,7 @@ export function hasProperty<T extends object>(
 		return false;
 	}
 
-	const value = object[property];
+	const value = object[property as keyof T];
 
 	if (expect?.type && typeof value !== expect.type) {
 		return false;
@@ -46,7 +46,10 @@ export function hasProperty<T extends object>(
 	return true;
 }
 
-async function hasTasksChanged(taskDirectory: string, hash: string): Promise<{ changed: boolean; reason: string; }> {
+async function hasTasksChanged(
+	taskDirectory: string,
+	hash: string
+): Promise<{ changed: boolean; reason: string }> {
 	const hashFilePath = path.join(taskDirectory, hash);
 
 	const listFiles = async (dir: string): Promise<string[]> => {
@@ -84,18 +87,24 @@ async function hasTasksChanged(taskDirectory: string, hash: string): Promise<{ c
 	} catch {}
 
 	if (!previousHash) return { changed: true, reason: "no previous hash" };
-	if (previousHash !== currentHash) return { changed: true, reason: "hash mismatch" };
+	if (previousHash !== currentHash)
+		return { changed: true, reason: "hash mismatch" };
 	return { changed: false, reason: "up-to-date" };
 }
 
 async function writeHash(taskDirectory: string, hash: string) {
 	const hashFilePath = path.join(taskDirectory, hash);
 
-	const listFiles = async (dir: string): Promise<string[]> => {
+	const listFiles = async (
+		dir: string,
+		includeHidden: boolean = false
+	): Promise<string[]> => {
 		const entries = await fs.readdir(dir, { withFileTypes: true });
 		const files: string[] = [];
 		for (const entry of entries) {
-			if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+			if (entry.name === "node_modules") continue;
+			if (includeHidden && entry.name.startsWith(".")) continue; // Skip hidden files unless specified otherwise.
+
 			const fullPath = path.join(dir, entry.name);
 			if (entry.isDirectory()) files.push(...(await listFiles(fullPath)));
 			else files.push(fullPath);
@@ -127,7 +136,10 @@ export async function maybeGenerateTypes(taskDir: string) {
 
 	const start = Date.now();
 	try {
-		const { changed, reason } = await hasTasksChanged(taskDir, ".anqueue-types.hash");
+		const { changed, reason } = await hasTasksChanged(
+			taskDir,
+			".anqueue-types.hash"
+		);
 		if (!changed) return;
 
 		// Fire-and-forget with timeout
@@ -140,7 +152,10 @@ export async function maybeGenerateTypes(taskDir: string) {
 		await writeHash(taskDir, ".anqueue-types.hash");
 	} catch (err) {
 		// Log once; don’t fail startup
-		console.warn("[anqueue] type generation skipped:", err instanceof Error ? err.message : String(err));
+		console.warn(
+			"[anqueue] type generation skipped:",
+			err instanceof Error ? err.message : String(err)
+		);
 	} finally {
 		const ms = Date.now() - start;
 		if (ms > 100) console.log(`[anqueue] types gen took ${ms}ms`);

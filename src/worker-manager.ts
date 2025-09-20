@@ -9,12 +9,23 @@ import Worker from "./worker.js";
 import type {
 	WorkerOptions,
 	WorkerEvent,
+	WorkerInfo,
 } from "../types/index.d.ts";
 
 interface WorkerManagerOptions {
 	workerPrefix: string;
 	maxWorkers: number;
 }
+
+type WorkerCandidate = {
+	worker: Worker;
+	info: WorkerInfo | null;
+	isAvailable: boolean | null;
+};
+
+const DEFAULT_WORKER_OPTIONS: WorkerOptions = {
+	maxConcurrentTasks: 3,
+};
 
 /**
  * Manages worker processes for task execution in the queue system.
@@ -40,10 +51,10 @@ export default class WorkerManager {
 	public readonly maxWorkers: number;
 
 	/** The queue instance that this worker manager is associated with */
-	private _queue: Queue;
+	#queue: Queue;
 
 	/** Map of worker IDs to their corresponding child processes */
-	private _workers: Map<string, Worker> = new Map();
+	#workers: Map<string, Worker> = new Map();
 
 	/**
 	 * Creates a new WorkerManager instance.
@@ -53,7 +64,7 @@ export default class WorkerManager {
 	 */
 	constructor(queue: Queue, taskDirectory: string, opts: WorkerManagerOptions) {
 		this.taskDirectory = taskDirectory;
-		this._queue = queue;
+		this.#queue = queue;
 		this.maxWorkers = opts.maxWorkers;
 		this.workerPrefix = opts.workerPrefix;
 	}
@@ -65,35 +76,55 @@ export default class WorkerManager {
 	 * @returns The Worker if found, undefined otherwise
 	 */
 	public get(id: string) {
-		return this._workers.get(id);
+		return this.#workers.get(id);
 	}
 
 	public set(id: string, worker: Worker) {
-		return this._workers.set(id, worker);
+		return this.#workers.set(id, worker);
 	}
 
 	public remove(id: string) {
-		const worker = this._workers.get(id);
-		
+		const worker = this.#workers.get(id);
+
 		if (worker) worker.close();
 
-		return this._workers.delete(id);
+		return this.#workers.delete(id);
 	}
 
-	public map(f: (worker: Worker, workerId: string) => void) {
-		return Array.from(this._workers.values()).map((worker, key) => f(worker, key as unknown as string));
+	public map<T>(f: (worker: Worker, workerId: string) => T): T[] {
+		return Array.from(this.#workers.values()).map((worker, key) =>
+			f(worker, key as unknown as string)
+		);
 	}
 
-	public forEach(f: (worker: Worker, workerId: string) => void) {
-		this._workers.forEach((worker, key) => f(worker, key));
+	public forEach(f: (worker: Worker, workerId: string) => void): void {
+		this.#workers.forEach((worker, key) => f(worker, key));
 	}
 
 	public get size() {
-		return this._workers.size;
+		return this.#workers.size;
 	}
 
 	public getQueue(): Queue {
-		return this._queue;
+		return this.#queue;
+	}
+
+	public getAvailableWorkers(): Worker[] {
+		return this.map((worker) => {
+			if (
+				worker.cachedInfo &&
+				worker.cachedInfo.taskLoad < worker.maxConcurrentTasks
+			) {
+				return worker;
+			}
+			return undefined;
+		})
+			.filter((worker) => typeof worker !== "undefined")
+			.sort(
+				(a, b) =>
+					a.cachedInfo!.taskLoad / a.maxConcurrentTasks -
+					b.cachedInfo!.taskLoad / b.maxConcurrentTasks
+			);
 	}
 
 	/**
@@ -103,17 +134,34 @@ export default class WorkerManager {
 	 * @returns The first available worker process
 	 */
 	public getAvailable(): Worker | undefined {
-		const workers = this._workers;
-		const workersArray = Array.from(workers.values());
+		const workers = this.#workers;
+		const workerCount = workers.size;
 
 		// Create a new worker if there isn't one available yet.
-		if (workers.size === 0) return this.spawn();
+		if (workerCount === 0) return this.spawn();
 
-		const availableWorkers = workersArray.filter((worker) => {
-			return worker.currentTaskLoad < worker.maxConcurrentTasks;
+		// Find any available workers and select the least busy one.
+		const availableWorker = this.map((worker) => {
+			if (
+				worker.cachedInfo &&
+				worker.cachedInfo.taskLoad < worker.maxConcurrentTasks
+			)
+				return worker;
+			else return undefined;
+		}).filter(Boolean) as Worker[];
+
+		// If no active worker is available, but max workers hasn't been reached spawn a new one.
+		if (availableWorker.length === 0 && this.maxWorkers > workerCount) {
+			return this.spawn();
+		}
+
+		const leastBusy = availableWorker.reduce((prev, current) => {
+			return prev.cachedInfo!.taskLoad <= current.cachedInfo!.taskLoad
+				? prev
+				: current;
 		});
 
-		return availableWorkers.length > 0 ? availableWorkers[0] : this.spawn();
+		return leastBusy;
 	}
 
 	/**
@@ -150,18 +198,22 @@ export default class WorkerManager {
 	 * @returns The spawned Worker
 	 */
 	public spawn(
-		workerId: string = this._generateId(),
-		opts: WorkerOptions = {}
+		workerId: string = this.#generateId(),
+		opts: WorkerOptions = DEFAULT_WORKER_OPTIONS
 	) {
-		if (this._workers.size >= this.maxWorkers) {
-			throw new Error(`Maximum number of workers reached: ${this.maxWorkers}`);
+		const workerCount = this.#workers.size;
+
+		if (workerCount >= this.maxWorkers) {
+			throw new Error(
+				`Maximum number of workers reached: ${workerCount}/${this.maxWorkers}`
+			);
 		}
 
 		// Resolve compiled worker path (dist or transpiled in-memory when using loaders)
 		const __dirname = path.dirname(fileURLToPath(import.meta.url));
 		const modulePath = path.join(__dirname, "worker-script.js");
 
-		const forkOpts: any = {
+		const forkOpts = {
 			env: {
 				...process.env,
 				WORKER_ID: workerId,
@@ -177,12 +229,12 @@ export default class WorkerManager {
 		}
 
 		const worker = new Worker(this, fork(modulePath, [], forkOpts), workerId);
-		this._workers.set(workerId, worker);
+		this.#workers.set(workerId, worker);
 
 		return worker;
 	}
 
-	private _generateId(): string {
-		return this.workerPrefix + (this._workers.size + 1);
+	#generateId(): string {
+		return this.workerPrefix + (this.#workers.size + 1);
 	}
 }

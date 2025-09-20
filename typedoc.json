@@ -1,0 +1,16 @@
+{
+	"entryPoints": ["index.ts"],
+	"out": "docs",
+	"name": "AnQueue",
+	"includeVersion": true,
+	"excludePrivate": true,
+	"excludeProtected": true,
+	"excludeExternals": true,
+	"excludeNotDocumented": false,
+	"tsconfig": "tsconfig.build.json",
+	"readme": "README.md",
+	"plugin": [],
+	"hideGenerator": true,
+	"categorizeByGroup": true,
+	"sort": ["source-order"]
+}

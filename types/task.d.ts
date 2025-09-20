@@ -2,6 +2,11 @@ import { Task } from "../index.ts";
 import type { Error, PrismaClient } from "./index.js";
 import type { TaskData } from "./index.js";
 
+export interface TaskModule {
+	default: new (...args: unknown[]) => TaskExecutor;
+	[key: string]: unknown;
+}
+
 export interface TaskOptions<TData = TaskData> {
     uid?: string;
     name: string;
@@ -17,8 +22,7 @@ export interface TaskOptions<TData = TaskData> {
     runAt?: Date;
 }
 
-export type TaskValidator<T extends TaskData = TaskData> = (task: Task<T>) => boolean;
-export type TaskValidationRule<T extends TaskData = TaskData> = TaskValidator<T>;
+export type TaskValidationRule<T extends TaskData = TaskData> = (task: Task<T>) => boolean;
 
 export interface TaskStatus {
     uid: string;
@@ -40,7 +44,7 @@ export type TaskResult<T> = {
     processed: boolean;
 } & T;
 
-export interface WorkerStatus {
+export interface WorkerTaskStatus {
     task: Task | null;
     error: string | null;
     result: TaskResult;

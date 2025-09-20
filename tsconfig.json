@@ -20,6 +20,7 @@
 		"./src/**/*.ts",
 		"./index.ts",
 		"./scripts/**/*.ts",
+		"./types/**/*.d.ts",
 		"scripts/test/index.ts",
 		"scripts/build/index.ts",
 		"scripts/build/helpers.ts",

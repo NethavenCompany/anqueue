@@ -1,4 +1,4 @@
-import type { TaskData, TaskResult, PrismaClient, TaskValidationRule } from "../types/index.d.ts";
+import type { TaskData, TaskResult, TaskValidationRule, AdapterImplementation } from "../types/index.d.ts";
 
 import { Task } from "../index.js";
 
@@ -29,18 +29,18 @@ export default class TaskExecutor<T extends TaskData = TaskData, R = any> {
 		_task: Task<T>,
 		_result: TaskResult<R> | null,
 		_error: unknown,
-		_db: PrismaClient | null
+		_db: AdapterImplementation | null
 	) {}
 
 	async onComplete(
 		_task: Task<T>,
 		_result: TaskResult<R>,
-		_db: PrismaClient | null
+		_db: AdapterImplementation | null
 	) {}
 
 	async saveResult(
 		_task: Task<T>,
 		_result: TaskResult<R>,
-		_db: PrismaClient
+		_db: AdapterImplementation
 	) {}
 }

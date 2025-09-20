@@ -4,13 +4,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-interface TaskModule {
-	default: any;
-	[key: string]: any;
-}
+const FILENAME = fileURLToPath(import.meta.url);
+const DIRNAME = path.dirname(FILENAME);
 
 interface TaskTypeInfo {
 	className: string;
@@ -37,7 +32,7 @@ function generateDataTypeName(className: string): string {
 async function generateQueueTypes(taskDirectory: string, verbose = true, opts?: { signal: AbortSignal }): Promise<void> {
 	const signal = opts?.signal;
 	const throwIfAborted = () => { if (signal?.aborted) throw new Error("generateQueueTypes aborted"); };
-	const projectRoot = path.resolve(__dirname, "..");
+	const projectRoot = path.resolve(DIRNAME, "..");
 	const typesDir = path.join(projectRoot, "types");
 	const queueTypesPath = path.join(typesDir, "taskdata.d.ts");
 	const taskDirPath = path.join(process.cwd(), taskDirectory);

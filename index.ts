@@ -1,23 +1,21 @@
-import path from "path";
-import { ChildProcess, fork } from "child_process";
-
 import Task from "./src/task.js";
-import TaskStore from "./src/task-store.js";
+import taskStore from "./src/task-store.js";
 import TaskExecutor from "./src/task-executor.js";
 import TaskExecutorRegistry from "./src/task-registry.js";
 import WorkerManager from "./src/worker-manager.js";
+import { AdapterType, PrismaAdapter, MySQLAdapter } from "./src/database-adapter.js";
+import { batch, single } from "./src/task-strategies.js";
 
 import { getFileParts } from "./src/lib/files.js";
-import { safeUpsert } from "./src/lib/db.js";
 import { maybeGenerateTypes, hasProperty } from "./src/lib/util.js";
 
 import type {
 	QueueOptions,
-	WorkerStatus,
+	WorkerTaskStatus,
 	TaskStatus,
 	TaskResult,
-	PrismaClient,
 	TaskValidationRule,
+	AdapterImplementation
 } from "./types/index.d.ts";
 
 /**
@@ -31,7 +29,7 @@ import type {
  * const queue = new Queue("./tasks");
  * await queue.init();
  *
- * const task = new Task("process-data", { priority: 1 });
+ * const task = new Task({ type: "process-data", priority: 1 });
  * queue.add(task);
  *
  * // Process any pending tasks automatically every 30 seconds
@@ -39,6 +37,8 @@ import type {
  * ```
  */
 export default class Queue {
+	public id: string;
+
 	/** Directory containing task definitions and implementations */
 	public taskDirectory: string;
 
@@ -46,16 +46,16 @@ export default class Queue {
 	public workers: WorkerManager;
 
 	/** Internal array of tasks waiting to be executed */
-	private taskStack: Task[] = [];
+	#taskStack: Task[] = [];
 
 	/** Registry of available task executors */
-	private taskExecutors: TaskExecutorRegistry;
+	#taskExecutors: TaskExecutorRegistry;
 
 	/** Storage layer for task persistence and database operations */
-	private taskStore: TaskStore;
+	#taskStore: taskStore;
 
 	/** Flag indicating if the automatic execution loop has been initialized */
-	private _loopInitialized: boolean = false;
+	#loopInitialized: boolean = false;
 
 	/**
 	 * Creates a new Queue instance.
@@ -67,31 +67,35 @@ export default class Queue {
 	 * @example
 	 * ```typescript
 	 * const queue = new Queue("./src/tasks", {
-	 *   db: new PrismaClient()
+	 *   db: new DatabaseAdaptor()
 	 * });
 	 *
 	 * await queue.init();
 	 * ```
 	 */
-	constructor(taskDirectory: string, opts: QueueOptions = {}) {
+	constructor(taskDirectory: string, options: QueueOptions = {}) {
 		if (typeof taskDirectory === "undefined") {
 			throw new Error(
 				`[ERROR] Property "taskDirectory" is required in a new Queue()`
 			);
 		}
 
+		this.id = options.id || "Anqueue";
+
 		this.taskDirectory = taskDirectory;
 
 		maybeGenerateTypes(this.taskDirectory);
 
-		this.workers = new WorkerManager(this, taskDirectory, {
-			workerPrefix: opts.workerPrefix || "anqueue-worker-",
-			maxWorkers: opts.maxWorkers || 3,
-		});
-		this.taskStore = new TaskStore(this);
-		this.taskExecutors = new TaskExecutorRegistry();
+		const { db, workerPrefix, maxWorkers } = options;
 
-		if (opts.db) this.setDatabase(opts.db);
+		this.workers = new WorkerManager(this, taskDirectory, {
+			workerPrefix: workerPrefix || `${this.id}-worker-`,
+			maxWorkers: maxWorkers || 3,
+		});
+		this.#taskStore = new taskStore(this);
+		this.#taskExecutors = new TaskExecutorRegistry();
+
+		if (db) this.setDatabase(db);
 	}
 
 	// Public methods
@@ -115,7 +119,7 @@ export default class Queue {
 	public async init(): Promise<Queue> {
 		this.workers.spawn();
 
-		await this.taskExecutors.initialize(this.taskDirectory);
+		await this.#taskExecutors.initialize(this.taskDirectory);
 
 		return this;
 	}
@@ -123,11 +127,11 @@ export default class Queue {
 	/**
 	 * Sets the database connection for the queue and all of its active workers.
 	 *
-	 * @param db - Prisma client instance for database operations
+	 * @param db - Database adaptor instance for database operations
 	 */
-	public setDatabase(db: PrismaClient) {
-		this.taskStore.db = db;
-		console.log("[Anqueue] 🔗 Database connection set");
+	public setDatabase(adaptor: AdapterImplementation) {
+		this.#taskStore.dbAdaptor = adaptor;
+		console.log(`[${this.id}] 🔗 Database connection set with ${adaptor.type} client`);
 	}
 
 	/**
@@ -136,6 +140,8 @@ export default class Queue {
 	 * This method runs continuously until stopped, checking for pending tasks
 	 * and executing them at regular intervals. It also syncs with the database
 	 * to ensure task state consistency.
+	 *
+	 * NOTE: Do NOT await this function, IT WILL BLOCK THE REST OF YOUR SCRIPT
 	 *
 	 * @param delay - Delay between execution cycles in seconds
 	 * @returns Promise that resolves when the loop is stopped
@@ -150,14 +156,14 @@ export default class Queue {
 	 * ```
 	 */
 	public async runAutomatically(timeout: number) {
-		this._loopInitialized = true;
+		this.#loopInitialized = true;
 
 		const readableDuration = timeout >= 60 ? timeout / 60 : timeout;
 		const suffix =
 			timeout >= 60 ? (timeout === 60 ? "minute" : "minutes") : "seconds";
 
-		while (this._loopInitialized) {
-			await this.taskStore.syncWithDB();
+		while (this.#loopInitialized) {
+			await this.#taskStore.syncWithDB();
 
 			const pendingTasks = this.getPendingTasks();
 
@@ -167,12 +173,21 @@ export default class Queue {
 			}
 
 			console.log(
-				`[Anqueue] 🧹 Running pending tasks (every ${readableDuration} ${suffix})`
+				`[${this.id}] 🧹 Running pending tasks (every ${readableDuration} ${suffix})`
 			);
 
 			await this.runTasks(pendingTasks);
 			await new Promise((resolve) => setTimeout(resolve, timeout * 1000));
 		}
+	}
+
+	#getStrategy(taskLoad: number) {
+		const maxBatchedTasks = this.workers
+			.map(({ maxConcurrentTasks }) => maxConcurrentTasks)
+			.reduce((acc, current) => (acc += current), 0);
+
+		if (taskLoad > maxBatchedTasks / 3) return "batch";
+		else return "single";
 	}
 
 	/**
@@ -194,72 +209,35 @@ export default class Queue {
 		if (!tasks) tasks = this.getPendingTasks();
 
 		const taskLoad = tasks.length;
+		const sendStrategy = this.#getStrategy(taskLoad);
 
-		if (taskLoad === 0) return;
+		// Return empty stats if no tasks have been executed.
+		if (taskLoad === 0) {
+			return {
+				tasksSent: 0,
+				noWorkerAvailable: 0,
+				noExecutorFound: 0,
+				validationFailed: 0,
+			};
+		}
 
 		if (taskLoad > 1) await this.scheduleTasks();
 
+		const maxTasksAbleToSend = this.workers.map(worker => {
+			return worker.maxConcurrentTasks - (worker.cachedInfo?.taskLoad || 0);
+		}).reduce((acc, curr) => acc += curr);
+
 		console.log(
-			`[Anqueue] 🚀 Sending ${taskLoad} pending`,
+			`[${this.id}] 🚀 Sending ${maxTasksAbleToSend} pending`,
 			taskLoad > 1 ? "tasks" : "task",
 			"to available workers"
 		);
 
-		const stats = {
-			tasksSent: 0,
-			noWorkerAvailable: 0,
-			noExecutorFound: 0,
-			validationFailed: 0,
-		};
-
-		for (const task of tasks) {
-			const worker = this.workers.getAvailable();
-
-			if (!worker) {
-				stats.noWorkerAvailable += 1;
-				continue;
-			}
-
-			const executor = this.taskExecutors.getExecutor(task.type);
-
-			if (!executor) {
-				stats.noExecutorFound += 1;
-				console.warn(`[Anqueue] ⏩ Skipping and removing task: ${task.name} (No executor found)`);
-				this.remove(task.uid);
-				continue;
-			}
-
-			// Validate task before sending to worker
-			const { passed, reason } = task.validate(executor.validationSchema());
-
-			if (!passed) {
-				if (task.retryCount >= task.maxRetries) {
-					console.warn(`[Anqueue] ⏩ Skipping and removing task: ${task.name} (Max retries reached)`);
-					this.remove(task.uid);
-					continue;
-				}
-
-				stats.validationFailed += 1;
-				task.status = "failed";
-				task.retryCount += 1;
-
-				const error = new Error(`Task ${task.name} validation failed: ${reason}`);
-
-				task.addError(error);
-
-				await executor.onFailure(task, { processed: false }, error, this.store.db);
-
-				continue;
-			}
-
-			worker.send({ event: "task", task });
-
-			this.remove(task.uid);
-
-			stats.tasksSent += 1;
+		if (sendStrategy === "single") {
+			return await single(this, tasks);
+		} else {
+			return await batch(this, tasks);
 		}
-
-		return stats;
 	}
 
 	/**
@@ -276,28 +254,27 @@ export default class Queue {
 	 * ```
 	 */
 	public async scheduleTasks(): Promise<void> {
-		console.log("[Anqueue] 📅 Scheduling tasks...");
+		console.log(`[${this.id}] 📅 Scheduling tasks...`);
 
 		// Sort tasks by priority and creation time
-		this.taskStack.sort((a, b) => {
+		this.#taskStack.sort((a, b) => {
 			// Higher priority first
 			if (a.priority !== b.priority) {
 				return b.priority - a.priority;
 			}
+
 			// Earlier tasks first (assuming tasks are added in order)
 			return 0;
 		});
-
-		console.log(`[Anqueue] 📋 Scheduled ${this.taskStack.length} tasks`);
 	}
 
 	/**
 	 * Gets the task store instance for database operations.
 	 *
-	 * @returns TaskStore instance
+	 * @returns #taskStore instance
 	 */
-	public get store(): TaskStore {
-		return this.taskStore;
+	public get store(): taskStore {
+		return this.#taskStore;
 	}
 
 	/**
@@ -306,7 +283,7 @@ export default class Queue {
 	 * @returns TaskExecutorRegistry instance
 	 */
 	public get executorRegistry(): TaskExecutorRegistry {
-		return this.taskExecutors;
+		return this.#taskExecutors;
 	}
 
 	/**
@@ -322,8 +299,11 @@ export default class Queue {
 	 * ```
 	 */
 	public add(task: Task): this {
-		this.taskStack.push(task);
-		console.log(`[Anqueue] ➕ Added task to stack: ${task.name} (ID: ${task.uid})`);
+		this.#taskStack.push(task);
+		
+		console.log(
+			`[${this.id}] ➕ "${task.name}" added to queue (ID: ${task.uid})`
+		);
 
 		return this;
 	}
@@ -342,12 +322,17 @@ export default class Queue {
 	 * }
 	 * ```
 	 */
-	public remove(taskId: string): boolean {
-		const index = this.taskStack.findIndex((task) => task.uid === taskId);
+	public remove(taskId: string, silent = false): boolean {
+		const index = this.#taskStack.findIndex((task) => task.uid === taskId);
 
 		if (index !== -1) {
-			const task = this.taskStack.splice(index, 1)[0];
-			console.log(`[Anqueue] 🗑️ Removed task from stack: ${task.name} (ID: ${taskId})`);
+			const task = this.#taskStack.splice(index, 1)[0];
+
+			if(!silent) {
+				console.log(
+					`[${this.id}] 🗑️ ${task.name} removed from queue (ID: ${taskId})`
+				);
+			}
 
 			return true;
 		}
@@ -399,7 +384,11 @@ export default class Queue {
 	 * ```
 	 */
 	public getTask(taskId: string): Task | undefined {
-		return this.taskStack.find((task) => task.uid === taskId);
+		return this.#taskStack.find((task) => task.uid === taskId);
+	}
+
+	public getTasks() {
+		return [...this.#taskStack];
 	}
 
 	/**
@@ -414,7 +403,7 @@ export default class Queue {
 	 * ```
 	 */
 	public getPendingTasks() {
-		return this.taskStack.filter(
+		return this.#taskStack.filter(
 			(task) => typeof task.readyToRun === "function" && task.readyToRun()
 		);
 	}
@@ -433,7 +422,7 @@ export default class Queue {
 	 * ```
 	 */
 	public getTaskStatuses(): TaskStatus[] {
-		return this.taskStack.map((task) => task.getStatus());
+		return this.#taskStack.map((task) => task.getStatus());
 	}
 
 	/**
@@ -443,11 +432,20 @@ export default class Queue {
 	 * the queue to an empty state.
 	 */
 	public clear(): void {
-		this.taskStack = [];
+		this.#taskStack = [];
 		console.log("🧹 Queue cleared");
 	}
 }
 
-export { Task, TaskExecutor, getFileParts, safeUpsert, hasProperty, WorkerManager };
+export {
+	Task,
+	TaskExecutor,
+	getFileParts,
+	hasProperty,
+	WorkerManager,
+	AdapterType,
+	PrismaAdapter,
+	MySQLAdapter
+};
 
-export type { WorkerStatus, TaskResult, TaskStatus, TaskValidationRule };
+export type { WorkerTaskStatus, TaskResult, TaskStatus, TaskValidationRule };

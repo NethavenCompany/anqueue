@@ -1,6 +1,6 @@
 {
   "name": "anqueue",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "An asynchronous node task queue",
   "keywords": [
     "async",
@@ -43,6 +43,7 @@
     "clean": "rm -rf dist",
     "build": "npm run clean && npx tsc --project tsconfig.build.json && cp -r types dist/",
     "build:watch": "npx tsc --project tsconfig.build.json --watch",
+    "doc": "typedoc",
     "prepublishOnly": "npm run build",
     "prepack": "npm run build",
     "version": "npm run build && git add -A dist",
@@ -50,8 +51,9 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "typescript": "^5.9.2",
-    "tsx": "^4.20.4"
+    "tsx": "^4.20.4",
+    "typedoc": "^0.28.13",
+    "typescript": "^5.9.2"
   },
   "engines": {
     "node": ">=18.0.0"

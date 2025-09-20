@@ -3,35 +3,43 @@ import { ChildProcess } from "child_process";
 import { Task } from "../index.js";
 import WorkerManager from "./worker-manager.js";
 
-import type { ProcessEvent, WorkerEvent, WorkerStatus } from "../types/index.d.ts";
+import type {
+	ProcessEvent,
+	WorkerEvent,
+	WorkerInfo,
+	WorkerTaskStatus,
+} from "../types/index.d.ts";
 
 type DataToWorker = { event: WorkerEvent } & Record<string, unknown>;
-type DataFromWorker = { event: ProcessEvent } & WorkerStatus;
+type DataFromWorker = { event: ProcessEvent } & WorkerTaskStatus;
 
 export default class Worker {
 	public id: string;
-	public currentTaskLoad: number = 0;
 	public maxConcurrentTasks: number = 10;
+	public cachedInfo: WorkerInfo | null = null;
+	public cacheInterval: number;
 
-	protected _manager: WorkerManager;
-	protected _process: ChildProcess;
+	#manager: WorkerManager;
+	#process: ChildProcess;
 
-	constructor(manager: WorkerManager, process: ChildProcess, id: string) {
-		this._manager = manager;
-		this._process = process;
+	constructor(manager: WorkerManager, process: ChildProcess, id: string, cacheRate: number = 200) {
 		this.id = id;
+		this.cacheInterval = cacheRate;
 
-		this._registerListeners();
+		this.#manager = manager;
+		this.#process = process;
+
+		this.#initialize();
 	}
 
-	public send(data: { event: WorkerEvent } & Record<string, unknown>) {
+	public send(data: DataToWorker) {
 		if (!data.event) return;
-		this._process.send(data);
+		this.#process.send(data);
 	}
 
-	public async getInfo() {
+	public async getInfo(): Promise<WorkerInfo | null> {
 		return new Promise((resolve) => {
-			const worker = this._process;
+			const worker = this.#process;
 
 			if (!worker) {
 				resolve(null);
@@ -44,9 +52,11 @@ export default class Worker {
 
 			worker.once(
 				"message",
-				(response: { event: ProcessEvent } & Record<string, unknown>) => {
+				(response: DataFromWorker & { data: WorkerInfo }) => {
 					clearTimeout(timeout);
+
 					if (response.event === "workerInfo") {
+						this.cachedInfo = response.data;
 						return resolve(response.data);
 					}
 
@@ -66,7 +76,7 @@ export default class Worker {
 	 * @returns True if the worker was successfully closed and removed, false otherwise
 	 */
 	public close(force = false) {
-		const worker = this._process;
+		const worker = this.#process;
 
 		worker.removeAllListeners();
 		worker.disconnect();
@@ -74,70 +84,70 @@ export default class Worker {
 		if (force) worker.kill();
 	}
 
-	public setTaskLoad(load: number) {
-		this.send({ event: "setTaskLoad", load });
-	}
-
-	private registerListener(
+	#registerListener(
 		event: "error" | "message" | "close" | "disconnect" | "exit" | "spawn",
 		listener: (...data: any) => void
 	) {
-		if (!this._process) return;
-		this._process.on(event, listener);
+		if (!this.#process) return;
+		this.#process.on(event, listener);
 	}
 
-	private _registerListeners() {
+	#initialize() {
 		// Track restart attempts for exponential backoff
 		let restartAttempts = 0;
 		const maxRestartAttempts = 5;
 
 		// In case worker crashes or loses connection, restart it with exponential backoff
-		this.registerListener("exit", (code, signal) => {
+		this.#registerListener("exit", (code, signal) => {
 			// Do not restart on clean exits or intentional terminations
 			if (code === 0 || signal === "SIGTERM" || signal === "SIGINT") {
-				this._manager.remove(this.id);
+				this.#manager.remove(this.id);
 				return;
 			}
 
 			console.error(
-				`[Worker: ${this.id}] Exited with code ${code} and signal ${signal}. Restarting...`
+				`[${this.id}] Exited with code ${code} and signal ${signal}. Restarting...`
 			);
 
 			if (restartAttempts < maxRestartAttempts) {
 				const delay = Math.min(1000 * Math.pow(2, restartAttempts), 30000); // Max 30 seconds
 				restartAttempts++;
-	
+
 				setTimeout(() => {
-					console.log(`[Worker: ${this.id}] Restarting (attempt ${restartAttempts})`);
-                    // Remove the old worker entry first, then spawn a new one
-                    this._manager.remove(this.id);
-					this._manager.spawn(this.id);
+					console.log(
+						`[${this.id}] Restarting (attempt ${restartAttempts})`
+					);
+					// Remove the old worker entry first, then spawn a new one
+					this.#manager.remove(this.id);
+					this.#manager.spawn(this.id);
 				}, delay);
 			} else {
 				this.close(true);
-				this._manager.remove(this.id);
-				console.error(`[Worker: ${this.id}] exceeded max restart attempts. Manual intervention required.`);
+				this.#manager.remove(this.id);
+				console.error(
+					`[${this.id}] Closed after exceeding max restart attempts. Manual intervention required.`
+				);
 			}
 		});
 
 		// Incase of on error just log it.
-		this.registerListener("error", (err) => {
-			console.error(`[Worker: ${this.id}] Error:`, err.message);
+		this.#registerListener("error", (err) => {
+			console.error(`[${this.id}] Error:`, err.message);
 		});
 
-		this.registerListener("message", async (data: DataFromWorker) => {
+		// Catch any task updates using a message listener.
+		this.#registerListener("message", async (data: DataFromWorker) => {
 			const task = data.task as Task;
 			const result = data.result as any;
 
 			if (!task || !result) return;
 
-			const queue = this._manager.getQueue();
+			const queue = this.#manager.getQueue();
 			const taskStore = queue.store;
 			const taskExecutors = queue.executorRegistry;
 
 			try {
-				// if(!this._manager.queue.store.db) {
-				if (!taskStore.db) {
+				if (!taskStore.dbAdaptor) {
 					if (task.status === "completed") {
 						queue.remove(task.uid);
 					}
@@ -145,18 +155,23 @@ export default class Worker {
 				}
 
 				await taskStore.saveTask(data);
-
+				
 				const executor = taskExecutors.getExecutor(task.type);
-
+				
 				if (!executor || !executor.saveResult) return;
 
-				await executor.saveResult(task, result, taskStore.db);
+				await executor.saveResult(task, result, taskStore.dbAdaptor);
 			} catch (err) {
 				console.error(
-					`[Worker: ${this.id}] Message handling error:`,
+					`[${this.id}] Task update handling error:`,
 					err instanceof Error ? err.message : String(err)
 				);
 			}
 		});
+
+		// And finally add a loop to fetch and cache worker info periodically
+		setInterval(async () => {
+			await this.getInfo();
+		}, this.cacheInterval)
 	}
 }

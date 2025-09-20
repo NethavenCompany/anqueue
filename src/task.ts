@@ -17,8 +17,8 @@ export default class QueueTask<TData = TaskData> {
 
 	// Execution control
 	promise: Promise<unknown>;
-	private _resolve!: (value: unknown) => void;
-	private _reject!: (error: unknown) => void;
+	#resolve!: (value: unknown) => void;
+	#reject!: (error: unknown) => void;
 
 	// Configuration
 	priority: number;
@@ -38,7 +38,7 @@ export default class QueueTask<TData = TaskData> {
 	errorHistory: Error[] = [];
 
 	constructor(options: TaskOptions<TData>) {
-		this.uid = options.uid || this._generateId();
+		this.uid = options.uid || this.#generateId();
 		this.name = options.name;
 		this.type = options.type;
 		this.description = options.description;
@@ -52,8 +52,8 @@ export default class QueueTask<TData = TaskData> {
 		this.runAt = options.runAt ? new Date(options.runAt) : undefined;
 		
 		this.promise = new Promise((resolve, reject) => {
-			this._resolve = resolve;
-			this._reject = reject;
+			this.#resolve = resolve;
+			this.#reject = reject;
 		});
 	}
 
@@ -99,28 +99,29 @@ export default class QueueTask<TData = TaskData> {
 			}
 
 			// Execute the task with timeout
-			const result = await Promise.race([executor(this), this._createTimeout()]);
+			const result = await Promise.race([executor(this), this.#createTimeout()]);
 
 			if(!result.processed) {
-				this._setFailed();
+				this.#setFailed();
 				return result;
 			}
 
-			this._setCompleted();
-			this._resolve(result);
+			this.#setCompleted();
+			this.#resolve(result);
 
 			const workerId = process.env.WORKER_ID;
 
-			console.log(`[${workerId ? "Worker: " + workerId : "Anqueue"}] (${this.name}): ID: ${this.uid} | Description: ${this.description} | Status: ${this.status}`);
+			console.log(`[${workerId ? workerId : "Anqueue"}] (${this.name}): Description: ${this.description} | Status: ${this.status}`);
 
 			return result;
 		} catch (error) {
-			if (this._shouldRetry(error as Error, retrySchema()) && this._retry()) {
+			// Recursively retry if retry schema condition is met
+			if (this.#shouldRetry(error as Error, retrySchema()) && this.#retry()) {
 				console.warn(`Retrying task ${this.uid} (attempt ${this.retryCount}) due to error:`, error);
-				return this.execute(executor, retrySchema); // Recursively retry
+				return this.execute(executor, retrySchema);
 			}
 
-			this._handleError(error as Error);
+			this.#handleError(error as Error);
 			throw error;
 		}
 	}
@@ -129,7 +130,7 @@ export default class QueueTask<TData = TaskData> {
 		if (this.status === "pending" || this.status === "running") {
 			this.status = "cancelled";
 			this.completedAt = new Date();
-			this._reject(new Error("Task cancelled"));
+			this.#reject(new Error("Task cancelled"));
 		}
 	}
 
@@ -174,7 +175,7 @@ export default class QueueTask<TData = TaskData> {
 	// Private methods
 	// ================================
 
-	private _retry(): boolean {
+	#retry(): boolean {
 		if (this.retryCount >= this.maxRetries) {
 			return false;
 		}
@@ -190,33 +191,39 @@ export default class QueueTask<TData = TaskData> {
 	}
 
 	
-	private _setFailed() {
+	#setFailed() {
 		this.status = "failed";
 		this.failedAt = new Date();
 		this.progress = 0;
 	}
 	
-	private _setCompleted() {
+	#setCompleted() {
 		this.status = "completed";
 		this.completedAt = new Date();
 		this.progress = 100;
 	}
 	
 
-	private _handleError(error: Error): void {
+	#handleError(error: Error): void {
 		this.addError(error);
-		this._setFailed();
-		this._reject(error);
+		this.#setFailed();
+		this.#reject(error);
 	}
 
 	// Utility
 	// ================================
 
-	private _generateId(): string {
+	static fromPlainObject(object: TaskOptions<TaskData>): QueueTask<TaskData> {
+		return new QueueTask({
+			...object
+		});
+	}
+
+	#generateId(): string {
 		return `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 	}
 	
-	private _createTimeout(): Promise<never> {
+	#createTimeout(): Promise<never> {
 		return new Promise((_, reject) => {
 			setTimeout(() => {
 				reject(new Error(`Task ${this.uid} timed out after ${this.timeout}ms`));
@@ -224,7 +231,7 @@ export default class QueueTask<TData = TaskData> {
 		});
 	}
 
-	private _shouldRetry(error: Error, retrySchema: string[]): boolean {
+	#shouldRetry(error: Error, retrySchema: string[]): boolean {
 		const retryableErrors = [
 			'Network timeout',
 			...retrySchema
