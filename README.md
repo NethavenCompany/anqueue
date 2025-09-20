@@ -50,7 +50,8 @@ const task = new Task({
   data: {
     email: new Email({ to: [], from: "", cc: [] })
   },
-  runAt: new Date(new Date.now() + 5000) // Delay execution by 5 seconds
+  delay: 5000, // Delay execution by 5 seconds (only for running tasks)
+  runAt: new Date(new Date.now() + 5000) // Schedule this task for a specific Date
 });
 
 queue.add(task);
