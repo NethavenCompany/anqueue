@@ -330,8 +330,7 @@ AnQueue automatically generates TypeScript types for your task directory at star
 2. **Validation**: Implement comprehensive validation rules for task data
 3. **Error Handling**: Use `task.addError()` to provide context for debugging
 4. **Progress Updates**: Call `task.updateProgress()` for long-running tasks
-5. **Resource Management**: Implement proper cleanup sing the `onComplete` and `onFailure` hooks for complex tasks
-6. **Database Operations**: Use `safeUpsert` for more reliable persistence when using prisma
+5. **Resource Management**: Implement proper cleanup logic in the `onComplete` and `onFailure` hooks for complex tasks
 
 ## Core Architecture
 
